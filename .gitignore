@@ -1,11 +1,9 @@
 .venv/
 .venv311/
+build/
+dist/
+sessions/
+*.spec
+yolov8n.pt
 __pycache__/
 *.pyc
-*.log
-logs/
-runs/
-.env
-.DS_Store
-Thumbs.db
-yolov8n.pt

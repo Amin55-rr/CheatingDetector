@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import cv2
 
@@ -17,6 +17,8 @@ class ProctorSession:
         self.logger: Optional[AlertLogger] = None
         self.detector = ProctorDetector(confidence_threshold=config.confidence_threshold)
         self.offscreen_start_ts: Optional[float] = None
+        self.offscreen_last_seen_ts: Optional[float] = None
+        self.multiple_people_start_ts: Optional[float] = None
         self.alert_count = 0
         self.start_ts = time.time()
         self.last_alert_ts_by_type: Dict[str, float] = {}
@@ -79,13 +81,12 @@ class ProctorSession:
 
             result = self.detector.analyze(frame)
             now = time.time()
-            current_alert = None
+            active_alerts: List[str] = []
 
             if result.phone_count > 0:
-                # Telephone visible = fraude directe (alerte immediate, criticite maximale).
                 emitted = self._emit_alert(
                     frame,
-                    "phone_fraud_direct",
+                    "phone_detected",
                     "critical",
                     {
                         "phone_count": result.phone_count,
@@ -94,9 +95,29 @@ class ProctorSession:
                     now,
                 )
                 if emitted:
-                    current_alert = "phone_fraud_direct"
+                    active_alerts.append("phone_detected")
+
+            if result.people_count >= self.config.multiple_people_min_count:
+                if self.multiple_people_start_ts is None:
+                    self.multiple_people_start_ts = now
+                elif now - self.multiple_people_start_ts >= self.config.multiple_people_seconds:
+                    emitted = self._emit_alert(
+                        frame,
+                        "multiple_people_detected",
+                        "high",
+                        {
+                            "people_count": result.people_count,
+                            "min_required": self.config.multiple_people_min_count,
+                        },
+                        now,
+                    )
+                    if emitted:
+                        active_alerts.append("multiple_people_detected")
+            else:
+                self.multiple_people_start_ts = None
 
             if result.offscreen:
+                self.offscreen_last_seen_ts = now
                 if self.offscreen_start_ts is None:
                     self.offscreen_start_ts = now
                 elif now - self.offscreen_start_ts >= self.config.offscreen_seconds:
@@ -104,30 +125,61 @@ class ProctorSession:
                         frame,
                         "offscreen_gaze",
                         "medium",
-                        {"yaw_ratio": result.debug.get("yaw_ratio", 0.0)},
+                        {
+                            "yaw_ratio": result.debug.get("yaw_ratio", 0.0),
+                            "eye_offset": result.debug.get("eye_offset", 0.0),
+                            "head_offscreen": result.debug.get("head_offscreen", 0.0),
+                            "eye_offscreen": result.debug.get("eye_offscreen", 0.0),
+                        },
                         now,
                     )
                     if emitted:
-                        current_alert = "offscreen_gaze"
+                        active_alerts.append("offscreen_gaze")
             else:
-                self.offscreen_start_ts = None
+                if self.offscreen_last_seen_ts is None or (now - self.offscreen_last_seen_ts) > 0.5:
+                    self.offscreen_start_ts = None
 
             status = (
                 f"Session active | Alerts: {self.alert_count} | "
                 f"People: {result.people_count} | Phones: {result.phone_count}"
             )
-            if current_alert:
-                status += f" | Last alert: {current_alert}"
-            if current_alert == "phone_fraud_direct":
+            if active_alerts:
+                status += f" | Last alert: {', '.join(active_alerts)}"
+
+            y_line = 65
+            if result.phone_count > 0:
                 cv2.putText(
                     frame,
-                    "FRAUDE DIRECTE: TELEPHONE DETECTE",
-                    (10, 65),
+                    "FRAUDE: TELEPHONE DETECTE",
+                    (10, y_line),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (0, 0, 255),
                     2,
                 )
+                y_line += 30
+            if result.people_count >= self.config.multiple_people_min_count:
+                cv2.putText(
+                    frame,
+                    "ALERTE: PLUSIEURS PERSONNES",
+                    (10, y_line),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                )
+                y_line += 30
+            if result.offscreen:
+                cv2.putText(
+                    frame,
+                    "ALERTE: REGARD HORS ECRAN (TETE/YEUX)",
+                    (10, y_line),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                )
+
             cv2.putText(frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
             cv2.imshow("Anti-Cheat Proctor", frame)
 

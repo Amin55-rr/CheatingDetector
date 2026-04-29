@@ -12,7 +12,6 @@ class AlertLogger:
         self.summary_file = session_dir / "summary.json"
         self.captures_dir.mkdir(parents=True, exist_ok=True)
         self._events: List[Dict[str, Any]] = []
-
     def add_event(self, event_type: str, severity: str, meta: Dict[str, Any]) -> Dict[str, Any]:
         event = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -29,7 +28,6 @@ class AlertLogger:
         by_type: Dict[str, int] = {}
         for e in self._events:
             by_type[e["type"]] = by_type.get(e["type"], 0) + 1
-
         summary = {
             "session": session_info,
             "total_alerts": len(self._events),

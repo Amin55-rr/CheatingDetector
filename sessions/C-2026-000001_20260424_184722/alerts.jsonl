@@ -1,2 +1,0 @@
-{"timestamp": "2026-04-24T18:47:45", "type": "phone_fraud_direct", "severity": "critical", "meta": {"phone_count": 1, "rule": "telephone_visible", "capture": "sessions\\C-2026-000001_20260424_184722\\captures\\20260424_184745_phone_fraud_direct.jpg"}}
-{"timestamp": "2026-04-24T18:47:57", "type": "phone_fraud_direct", "severity": "critical", "meta": {"phone_count": 1, "rule": "telephone_visible", "capture": "sessions\\C-2026-000001_20260424_184722\\captures\\20260424_184757_phone_fraud_direct.jpg"}}

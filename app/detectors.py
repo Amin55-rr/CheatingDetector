@@ -21,15 +21,21 @@ class ProctorDetector:
         self.confidence_threshold = confidence_threshold
         self.use_mediapipe_solutions = hasattr(mp, "solutions")
         self.face_mesh = None
+        # Tête tournée (modéré) — pas trop serré pour limiter les faux positifs
+        self.offscreen_threshold = 0.18
+        # Yeux qui ne regardent plus l'écran (iris vs ouverture de l'œil)
+        self.eye_away_threshold = 0.22
+        self._yaw_history: List[float] = []
+        self._yaw_window = 5
         if self.use_mediapipe_solutions:
             self.face_mesh = mp.solutions.face_mesh.FaceMesh(
                 static_image_mode=False,
                 max_num_faces=1,
+                refine_landmarks=True,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
         else:
-            # Fallback robuste si mp.solutions est indisponible dans l'environnement.
             self.face_detector = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
             )
@@ -44,7 +50,7 @@ class ProctorDetector:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         res = self.face_mesh.process(rgb)  # type: ignore[union-attr]
         if not res.multi_face_landmarks:
-            return False, {"face_detected": 0.0, "yaw_ratio": 0.0}
+            return False, {"face_detected": 0.0, "yaw_ratio": 0.0, "eye_offset": 0.0}
 
         face = res.multi_face_landmarks[0]
         h, w = frame_bgr.shape[:2]
@@ -57,32 +63,64 @@ class ProctorDetector:
         eye_mid_x = (lx + rx) / 2.0
         inter_eye = max(abs(rx - lx), 1.0)
         yaw_ratio = (nx - eye_mid_x) / inter_eye
+        self._yaw_history.append(float(yaw_ratio))
+        if len(self._yaw_history) > self._yaw_window:
+            self._yaw_history.pop(0)
+        smoothed_yaw = float(np.mean(self._yaw_history))
 
-        # Seuil empirique: tête trop tournée vers la gauche/droite
-        offscreen = abs(yaw_ratio) > 0.35
-        return offscreen, {"face_detected": 1.0, "yaw_ratio": float(yaw_ratio)}
+        eye_offscreen = False
+        eye_offset = 0.0
+        if len(landmarks) > 473:
+            left_iris = landmarks[468]
+            right_iris = landmarks[473]
+            left_inner = landmarks[133]
+            left_outer = landmarks[33]
+            right_inner = landmarks[362]
+            right_outer = landmarks[263]
+
+            left_min_x = min(left_outer.x, left_inner.x) * w
+            left_max_x = max(left_outer.x, left_inner.x) * w
+            right_min_x = min(right_outer.x, right_inner.x) * w
+            right_max_x = max(right_outer.x, right_inner.x) * w
+
+            left_width = max(left_max_x - left_min_x, 1.0)
+            right_width = max(right_max_x - right_min_x, 1.0)
+
+            left_ratio = ((left_iris.x * w) - left_min_x) / left_width
+            right_ratio = ((right_iris.x * w) - right_min_x) / right_width
+            eye_offset = float(((left_ratio - 0.5) + (right_ratio - 0.5)) / 2.0)
+            eye_offscreen = abs(eye_offset) > self.eye_away_threshold
+
+        head_offscreen = abs(smoothed_yaw) > self.offscreen_threshold
+        offscreen = head_offscreen or eye_offscreen
+        return offscreen, {
+            "face_detected": 1.0,
+            "yaw_ratio": float(smoothed_yaw),
+            "eye_offset": float(eye_offset),
+            "head_offscreen": 1.0 if head_offscreen else 0.0,
+            "eye_offscreen": 1.0 if eye_offscreen else 0.0,
+        }
 
     def _estimate_offscreen_fallback(self, frame_bgr: np.ndarray) -> Tuple[bool, Dict[str, float]]:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self.face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
         if len(faces) == 0:
-            return False, {"face_detected": 0.0, "yaw_ratio": 0.0}
+            return False, {"face_detected": 0.0, "yaw_ratio": 0.0, "eye_offset": 0.0}
 
         x, y, w, h = max(faces, key=lambda box: box[2] * box[3])
         frame_w = frame_bgr.shape[1]
         face_center_x_norm = (x + (w / 2.0)) / max(float(frame_w), 1.0)
 
-        # Calibration automatique: apprendre la position "normale" du candidat au debut.
         if self._fallback_baseline_x is None:
             self._fallback_samples.append(face_center_x_norm)
             if len(self._fallback_samples) >= self._fallback_warmup_samples:
                 self._fallback_baseline_x = float(np.mean(self._fallback_samples))
                 self._fallback_samples.clear()
-            return False, {"face_detected": 1.0, "yaw_ratio": 0.0}
+            return False, {"face_detected": 1.0, "yaw_ratio": 0.0, "eye_offset": 0.0}
 
         yaw_ratio = face_center_x_norm - self._fallback_baseline_x
-        offscreen = abs(yaw_ratio) > 0.20
-        return offscreen, {"face_detected": 1.0, "yaw_ratio": float(yaw_ratio)}
+        offscreen = abs(yaw_ratio) > 0.18
+        return offscreen, {"face_detected": 1.0, "yaw_ratio": float(yaw_ratio), "eye_offset": 0.0}
 
     def analyze(self, frame_bgr: np.ndarray) -> DetectionResult:
         yolo_results = self.model.predict(
@@ -97,7 +135,6 @@ class ProctorDetector:
         if boxes is not None:
             classes: List[int] = boxes.cls.cpu().numpy().astype(int).tolist()
             for cls_id in classes:
-                # COCO: 0 = person, 67 = cell phone
                 if cls_id == 0:
                     people_count += 1
                 elif cls_id == 67:
