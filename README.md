@@ -16,8 +16,8 @@ Application locale Python pour surveiller un examen pratique via webcam pendant 
 
 ## Prerequis
 
-- Python 3.11 recommande pour cet environnement Windows
-- Webcam fonctionnelle
+- Python 3.11 recommande pour cet environnement Windows.
+- Webcam fonctionnelle.
 
 ## Installation
 
@@ -59,6 +59,6 @@ avec:
 
 ## Limites (version actuelle)
 
-- Le regard hors ecran est une estimation simplifiee (MediaPipe si disponible, sinon fallback OpenCV), pas un eye-tracking precis.
-- Les performances dependent de la webcam et de l'eclairage.
-- Ce prototype aide la surveillance, il ne prend aucune decision de sanction.
+- Le regard hors ecran est une estimation simplifiee (MediaPipe si disponible, sinon fallback OpenCV), pas un eye-tracking precis
+- Les performances dependent de la webcam et de l'eclairage
+- Ce prototype aide la surveillance, il ne prend aucune decision de sanction
